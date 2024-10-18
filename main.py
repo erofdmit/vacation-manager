@@ -59,15 +59,77 @@ async def schedule_vacation_notifications(chat_id, start_date_str, end_date_str)
             await asyncio.sleep(delay)
             await send_notification(chat_id, f"До конца отпуска осталось {days} дней.")
     
-    # Сообщение в день окончания отпуска
-    if (end_date - now).total_seconds() > 0:
+    # Сообщение в день окончания отпуска и удаление из базы данных
+    delay_until_end = (end_date - now).total_seconds()
+    if delay_until_end > 0:
+        await asyncio.sleep(delay_until_end)
         await send_notification(chat_id, "Отпуск завершен сегодня.")
+        # Удаление отпуска из базы данных
+        cursor = db_conn.cursor()
+        cursor.execute("DELETE FROM vacations WHERE chat_id = ?", (chat_id,))
+        db_conn.commit()
 
 # Проверка на менеджера
 def is_manager(username):
     cursor = db_conn.cursor()
     cursor.execute("SELECT 1 FROM managers WHERE manager_username = ?", (username,))
     return cursor.fetchone() is not None
+
+@dp.message(Command("start"))
+async def start_command(message: types.Message):
+    await message.reply(
+        "Привет! Я бот для управления отпусками. Используй /help для получения списка доступных команд."
+    )
+
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
+    await message.reply(
+        """
+/start - Начало работы с ботом
+/help - Список доступных команд
+/vacation DD/MM/YYYY-DD/MM/YYYY - Запрос на отпуск
+/approve - Одобрить запрос на отпуск
+/disapprove - Отклонить запрос на отпуск
+/cancel_vacation - Отмена активного отпуска (только для менеджеров)
+/change_vacation DD/MM/YYYY-DD/MM/YYYY - Изменить даты отпуска (только для менеджеров)
+/add_manager @username - Добавить менеджера (только для админов)
+/managers - Показать список менеджеров
+/vacations_list - Показать список всех активных отпусков
+"""
+    )
+
+@dp.message(Command("managers"))
+async def list_managers(message: types.Message):
+    if not is_manager(message.from_user.username):
+        await message.reply("У вас нет прав для использования этой команды.")
+        return
+
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT manager_username FROM managers")
+    managers = cursor.fetchall()
+
+    if managers:
+        manager_list = "\n".join([f"@{manager[0]}" for manager in managers])
+        await message.reply(f"Список менеджеров:\n{manager_list}")
+    else:
+        await message.reply("Менеджеры не назначены.")
+
+# Обновление команды vacations_list
+@dp.message(Command("vacations_list"))
+async def list_vacations(message: types.Message):
+    if not is_manager(message.from_user.username):
+        await message.reply("У вас нет прав для использования этой команды.")
+        return
+
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT c.developer_username, v.start_date, v.end_date FROM vacations v JOIN chats c ON v.chat_id = c.chat_id")
+    vacations = cursor.fetchall()
+
+    if vacations:
+        vacation_list = "\n".join([f"Username: @{vacation[0]}, От: {vacation[1]} до: {vacation[2]}" for vacation in vacations])
+        await message.reply(f"Список активных отпусков:\n{vacation_list}")
+    else:
+        await message.reply("Нет активных отпусков.")
 
 # Команда /cancel_vacation (только для менеджеров)
 @dp.message(Command("cancel_vacation"))
@@ -127,6 +189,7 @@ async def change_vacation(message: types.Message):
     await message.reply(f"Даты отпуска изменены на {start_date} - {end_date}.")
 
 # Команда /vacation с проверкой на существующий отпуск
+# Обновление сохранения отпуска и чата
 @dp.message(Command("vacation"))
 async def vacation_request(message: types.Message):
     chat_id = message.chat.id
@@ -148,6 +211,14 @@ async def vacation_request(message: types.Message):
         await message.reply("Уже существует активный отпуск для этого чата.")
         return
 
+    # Сохранение чата, если его еще нет в таблице chats
+    cursor.execute("SELECT * FROM chats WHERE chat_id = ?", (chat_id,))
+    existing_chat = cursor.fetchone()
+
+    if not existing_chat:
+        cursor.execute("INSERT INTO chats (chat_id, developer_username) VALUES (?, ?)", (chat_id, developer_username))
+        db_conn.commit()
+
     # Сохранение запроса на отпуск
     save_vacation_request(db_conn, chat_id, developer_username, start_date, end_date)
 
@@ -166,13 +237,15 @@ async def vacation_request(message: types.Message):
     else:
         await message.reply("Нет доступных менеджеров в этом чате.")
 
-# Команда /approve
 @dp.message(Command("approve"))
 async def approve_vacation(message: types.Message):
-    chat_id = message.chat.id
+    if not is_manager(message.from_user.username):
+        await message.reply("У вас нет прав для одобрения отпуска.")
+        return
 
-    # Получение данных запроса на отпуск
+    chat_id = message.chat.id
     request = get_vacation_request(db_conn, chat_id)
+
     if not request:
         await message.reply("Нет активных запросов на отпуск для этого чата.")
         return
@@ -190,13 +263,16 @@ async def approve_vacation(message: types.Message):
     # Запуск уведомлений
     asyncio.create_task(schedule_vacation_notifications(chat_id, start_date, end_date))
 
-# Команда /disapprove
+
 @dp.message(Command("disapprove"))
 async def disapprove_vacation(message: types.Message):
-    chat_id = message.chat.id
+    if not is_manager(message.from_user.username):
+        await message.reply("У вас нет прав для отклонения отпуска.")
+        return
 
-    # Получение данных запроса на отпуск
+    chat_id = message.chat.id
     request = get_vacation_request(db_conn, chat_id)
+
     if not request:
         await message.reply("Нет активных запросов на отпуск для этого чата.")
         return

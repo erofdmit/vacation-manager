@@ -22,11 +22,13 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock /app/
 
 # Устанавливаем зависимости через Poetry
-RUN poetry config virtualenvs.create false \
-    && poetry install
+RUN python -m poetry config virtualenvs.create false \
+    && python -m poetry install
 
 # Копируем остальные файлы проекта в контейнер
 COPY . /app
 
+EXPOSE 8081 
+
 # Указываем команду для запуска бота
-CMD ["poetry", "run", "python", "main.py"]
+CMD ["python", "main.py"]
