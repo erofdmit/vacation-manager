@@ -77,3 +77,9 @@ def add_manager(conn, manager_username):
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO managers (manager_username) VALUES (?)", (manager_username,))
     conn.commit()
+
+# Удаление менеджера из таблицы managers
+def delete_manager(conn, manager_username):
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM managers WHERE manager_username = ?", (manager_username,))
+    conn.commit()
