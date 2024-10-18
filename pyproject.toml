@@ -10,6 +10,7 @@ python = "^3.12"
 aiogram = "^3.13.1"
 python-dotenv = "^1.0"
 pytz = "^2024.2"
+aiocron = "^1.8"
 
 
 [build-system]
